@@ -7,6 +7,7 @@ from imgaug import augmenters as iaa
 from keras.utils import Sequence
 import xml.etree.ElementTree as ET
 from utils import BoundBox, normalize, bbox_iou
+import matplotlib.pyplot as plt
 
 def parse_annotation(ann_dir, img_dir, labels=[]):
     all_imgs = []
@@ -62,9 +63,10 @@ class BatchGenerator(Sequence):
                        config, 
                        shuffle=True, 
                        jitter=True, 
-                       norm=None):
+                       norm=None,
+                       drawTheBoxes=False):
+        
         self.generator = None
-
         self.images = images
         self.config = config
 
@@ -73,11 +75,12 @@ class BatchGenerator(Sequence):
         self.norm    = norm
 
         self.counter = 0
+        self.drawTheBoxes=drawTheBoxes
         self.anchors = [BoundBox(0, 0, config['ANCHORS'][2*i], config['ANCHORS'][2*i+1]) for i in range(len(config['ANCHORS'])/2)]
 
+        '''
         ### augmentors by https://github.com/aleju/imgaug
         sometimes = lambda aug: iaa.Sometimes(0.5, aug)
-
         # Define our sequence of augmentation steps that will be applied to every image
         # All augmenters with per_channel=0.5 will sample one value _per image_
         # in 50% of all cases. In all other cases they will sample new values
@@ -132,6 +135,73 @@ class BatchGenerator(Sequence):
             ],
             random_order=True
         )
+        '''
+        ### augmentors by https://github.com/aleju/imgaug
+        sometimes = lambda aug: iaa.Sometimes(0.5, aug)
+
+        # Define our sequence of augmentation steps that will be applied to every image
+        # All augmenters with per_channel=0.5 will sample one value _per image_
+        # in 50% of all cases. In all other cases they will sample new values
+        # _per channel_.
+        self.aug_pipe = iaa.Sequential(
+            [
+                # apply the following augmenters to most images
+                #iaa.Fliplr(0.5), # horizontally flip 50% of all images
+                #iaa.Flipud(0.2), # vertically flip 20% of all images
+                #sometimes(iaa.Crop(percent=(0, 0.1))), # crop images by 0-10% of their height/width
+                #sometimes(iaa.Affine(
+                    #scale={"x": (0.8, 1.2), "y": (0.8, 1.2)}, # scale images to 80-120% of their size, individually per axis
+                    #translate_percent={"x": (-0.2, 0.2), "y": (-0.2, 0.2)}, # translate by -20 to +20 percent (per axis)
+                    #rotate=(-5, 5), # rotate by -45 to +45 degrees
+                    #shear=(-5, 5), # shear by -16 to +16 degrees
+                    #order=[0, 1], # use nearest neighbour or bilinear interpolation (fast)
+                    #cval=(0, 255), # if mode is constant, use a cval between 0 and 255
+                    #mode=ia.ALL # use any of scikit-image's warping modes (see 2nd image from the top for examples)
+                #)),
+                # execute 0 to 5 of the following (less important) augmenters per image
+                # don't execute all of them, as that would often be way too strong
+                iaa.SomeOf((0, 5),
+                    [
+                        #sometimes(iaa.Superpixels(p_replace=(0, 1.0), n_segments=(20, 200))), # convert images into their superpixel representation
+                        iaa.OneOf([
+                            iaa.GaussianBlur((0, 1.5)), # blur images with a sigma between 0 and 3.0
+                            iaa.AverageBlur(k=(2, 3)), # blur image using local means with kernel sizes between 2 and 7
+                            iaa.MedianBlur(k=(3, 7)), # blur image using local medians with kernel sizes between 2 and 7
+                        ]),
+                        #iaa.Sharpen(alpha=(0, 1.0), lightness=(0.75, 1.5)), # sharpen images
+                        #iaa.Emboss(alpha=(0, 1.0), strength=(0, 2.0)), # emboss images
+                        # search either for all edges or for directed edges
+                        #sometimes(iaa.OneOf([
+                        #    iaa.EdgeDetect(alpha=(0, 0.7)),
+                        #    iaa.DirectedEdgeDetect(alpha=(0, 0.7), direction=(0.0, 1.0)),
+                        #])),
+                        #iaa.AdditiveGaussianNoise(loc=0, scale=(0.0, 0.05*255), per_channel=0.5), # add gaussian noise to images
+                        iaa.AdditiveGaussianNoise(scale=0.05*255), # add gaussian noise to images
+                        #iaa.OneOf([
+                        #    iaa.Dropout((0.01, 0.1), per_channel=0.5), # randomly remove up to 10% of the pixels
+                        #    #iaa.CoarseDropout((0.03, 0.15), size_percent=(0.02, 0.05), per_channel=0.2),
+                        #]),
+                        #iaa.Invert(0.05, per_channel=True), # invert color channels
+                        #iaa.Add((-10, 10), per_channel=0.5), # change brightness of images (by -10 to 10 of original value)
+                        #iaa.Multiply((0.5, 1.2), per_channel=0.5), # change brightness of images (50-150% of original value)
+                        #iaa.ContrastNormalization((0.5, 1.5), per_channel=0.5), # improve or worsen the contrast
+                        
+                        #these are much better...
+                         iaa.OneOf([
+                            iaa.Add((-10, 10)), # change brightness of images (by -10 to 10 of original value)
+                            iaa.Multiply((0.5, 1.2)), # change brightness of images (50-150% of original value)
+                            iaa.ContrastNormalization((0.5, 1.5)), # improve or worsen the contrast
+                         ]),
+
+                        #iaa.Grayscale(alpha=(0.0, 1.0)),
+                        #sometimes(iaa.ElasticTransformation(alpha=(0.5, 3.5), sigma=0.25)), # move pixels locally around (with random strengths)
+                        #sometimes(iaa.PiecewiseAffine(scale=(0.01, 0.05))) # sometimes move parts of the image around
+                    ],
+                    random_order=True
+                )
+            ],
+            random_order=True
+        )
 
         if shuffle: np.random.shuffle(self.images)
 
@@ -173,7 +243,9 @@ class BatchGenerator(Sequence):
                         obj_indx  = self.config['LABELS'].index(obj['name'])
                         
                         center_w = (obj['xmax'] - obj['xmin']) / (float(self.config['IMAGE_W']) / self.config['GRID_W']) # unit: grid cell
-                        center_h = (obj['ymax'] - obj['ymin']) / (float(self.config['IMAGE_W']) / self.config['GRID_W']) # unit: grid cell
+                        # the following line is buggy ....., correcting it
+                        #center_h = (obj['ymax'] - obj['ymin']) / (float(self.config['IMAGE_W']) / self.config['GRID_W']) # unit: grid cell
+                        center_h = (obj['ymax'] - obj['ymin']) / (float(self.config['IMAGE_H']) / self.config['GRID_H']) # unit: grid cell
                         
                         box = [center_x, center_y, center_w, center_h]
 
@@ -210,21 +282,38 @@ class BatchGenerator(Sequence):
                 x_batch[instance_count] = self.norm(img)
             else:
                 # plot image and bounding boxes for sanity check
-                for obj in all_objs:
-                    if obj['xmax'] > obj['xmin'] and obj['ymax'] > obj['ymin']:
-                        cv2.rectangle(img[:,:,::-1], (obj['xmin'],obj['ymin']), (obj['xmax'],obj['ymax']), (255,0,0), 3)
-                        cv2.putText(img[:,:,::-1], obj['name'], 
-                                    (obj['xmin']+2, obj['ymin']+12), 
-                                    0, 1.2e-3 * img.shape[0], 
-                                    (0,255,0), 2)
-                        
+                if(self.drawTheBoxes==True):
+                    for obj in all_objs:
+                        if obj['xmax'] > obj['xmin'] and obj['ymax'] > obj['ymin']:
+                            cv2.rectangle(img, (obj['xmin'],obj['ymin']), (obj['xmax'],obj['ymax']), (255,0,0), 1)
+                            cv2.putText(img, obj['name'], 
+                                        (obj['xmin']+2, obj['ymin']+12), 
+                                        0, 1.2e-3 * img.shape[0], 
+                                        (0,255,0), 1)              
                 x_batch[instance_count] = img
+                
+                #tmp = x_batch[instance_count].astype(np.uint8);
+                #print "tmp.type: " , tmp.dtype
+                #(x_batch[instance_count])
+                #### comment this out..
+                #plt.figure(figsize=(5,5))
+                #plt.subplot(1, 2, 1)
+                #plt.imshow(tmp[:,:,::-1])
+                #plt.show();              
 
             # increase instance counter in current batch
             instance_count += 1  
 
         self.counter += 1
         #print ' new batch created', self.counter
+        '''
+        #### comment this out..
+        for ii in range(x_batch.shape[0]):
+            plt.figure(figsize=(5,5))
+            plt.subplot(1, 2, 1)
+            plt.imshow(x_batch[ii,:,:,::-1])
+            plt.show();
+        '''
 
         return [x_batch, b_batch], y_batch
 
@@ -237,6 +326,7 @@ class BatchGenerator(Sequence):
         image = cv2.imread(image_name)
         h, w, c = image.shape
         
+
         all_objs = copy.deepcopy(train_instance['object'])
 
         if jitter:
@@ -250,17 +340,23 @@ class BatchGenerator(Sequence):
             offx = int(np.random.uniform() * max_offx)
             offy = int(np.random.uniform() * max_offy)
             
-            image = image[offy : (offy + h), offx : (offx + w)]
+            image = image[offy : (offy + h), offx : (offx + w),:]
 
             ### flip the image
             flip = np.random.binomial(1, .5)
             if flip > 0.5: image = cv2.flip(image, 1)
                 
+            imageBefore = image.copy();
             image = self.aug_pipe.augment_image(image)            
             
         # resize the image to standard size
         image = cv2.resize(image, (self.config['IMAGE_H'], self.config['IMAGE_W']))
+        # modify the image from RGB to BGR..
         image = image[:,:,::-1]
+             
+        
+        #print "image.shape", image.shape
+        #print "image.type", image.dtype
 
         # fix object's position and size
         for obj in all_objs:
@@ -281,4 +377,13 @@ class BatchGenerator(Sequence):
                 obj['xmin'] = self.config['IMAGE_W'] - obj['xmax']
                 obj['xmax'] = self.config['IMAGE_W'] - xmin
                 
+        
+        #plt.figure(figsize=(5,5))
+        #plt.subplot(1, 2, 1)
+        #plt.imshow(imageBefore[:,:,::-1])
+        #plt.subplot(1, 2, 2)
+        #plt.imshow(image[:,:,::-1]) 
+        #plt.show()
+                   
+
         return image, all_objs

@@ -90,13 +90,13 @@ def draw_boxes(image, boxes, labels):
         ymin  = int((box.y - box.h/2) * image.shape[0])
         ymax  = int((box.y + box.h/2) * image.shape[0])
 
-        cv2.rectangle(image, (xmin,ymin), (xmax,ymax), (0,255,0), 3)
+        cv2.rectangle(image, (xmin,ymin), (xmax,ymax), (0,255,0), 2)
         cv2.putText(image, 
                     labels[box.get_label()] + ' ' + str(box.get_score()), 
                     (xmin, ymin - 13), 
                     cv2.FONT_HERSHEY_SIMPLEX, 
                     1e-3 * image.shape[0], 
-                    (0,255,0), 2)
+                    (0,255,0), 1)
         
     return image        
         
@@ -106,8 +106,19 @@ def decode_netout(netout, obj_threshold, nms_threshold, anchors, nb_class):
     boxes = []
     
     # decode the output by the network
+    
+    # netout[..., 0]-->x
+    # netout[..., 1]-->y
+    # netout[..., 2]-->w
+    # netout[..., 3]-->h
+    # netout[..., 4]-->confidence score for the box
+    # netout[..., 5:]-->vector of class scores
+    
+    # from 0 to 1 --> cofidence score 
     netout[..., 4]  = sigmoid(netout[..., 4])
+    #multiply the confidence score by the sofmax (probability) of the class vector==> netout[...,5:] = Prob(confidence for)*Prob(Class/Box)
     netout[..., 5:] = netout[..., 4][..., np.newaxis] * softmax(netout[..., 5:])
+    # set to zero everything below obj_threshold
     netout[..., 5:] *= netout[..., 5:] > obj_threshold
     
     for row in range(grid_h):
